@@ -174,6 +174,7 @@ func show_config_syntax():
 
 func _process(delta):
 	threadpool.process(delta)
+	return false # Must return false, unless we are terminating.
 
 func _finalize():
 	_plug_end()
