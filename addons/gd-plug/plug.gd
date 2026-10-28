@@ -374,6 +374,7 @@ func plug(repo, args={}):
 	var plugin = {}
 	plugin.name = plugin_name
 	plugin.url = ""
+	plugin.is_zip = false
 	if ":" in repo:
 		plugin.url = repo
 	elif repo.find("/") == repo.rfind("/"):
@@ -408,10 +409,10 @@ func plug(repo, args={}):
 	is_valid = is_valid and validate_var_type({"zip": zip_url}, "zip", TYPE_STRING, "String")
 	if typeof(zip_url) == TYPE_STRING and not zip_url.is_empty():
 		plugin.url = zip_url
-	plugin.is_zip = (typeof(zip_url) == TYPE_STRING and not zip_url.is_empty()) or is_zip_url(plugin.url)
-	if plugin.is_zip and (plugin.branch or plugin.tag or plugin.commit):
-		logger.error("Branch, tag, and commit options are not supported for ZIP URLs")
-		is_valid = false
+		plugin.is_zip = true
+		if plugin.branch or plugin.tag or plugin.commit:
+			logger.error("Branch, tag, and commit options are not supported for ZIP URLs")
+			is_valid = false
 
 	if is_valid:
 		_plugged_plugins[plugin.name] = plugin
@@ -817,21 +818,8 @@ func compare_plugins(p1, p2):
 	return changed_keys
 
 func get_plugin_name_from_repo(repo):
-	var source = repo.split("?")[0].split("#")[0].trim_suffix("/")
-	if source.contains("github.com/") and source.contains("/archive/"):
-		var github_parts = source.split("/")
-		if github_parts.size() > 4:
-			return github_parts[4]
-	if source.contains("codeload.github.com/"):
-		var codeload_parts = source.split("/")
-		if codeload_parts.size() > 4:
-			return codeload_parts[4]
-	repo = source.replace(".git", "").trim_suffix(".zip")
+	repo = repo.replace(".git", "").trim_suffix("/")
 	return repo.get_file()
-
-func is_zip_url(url):
-	var source = url.split("?")[0].split("#")[0]
-	return source.to_lower().ends_with(".zip")
 
 func validate_var_type(obj, var_name, type, type_string):
 	var value = obj.get(var_name)
