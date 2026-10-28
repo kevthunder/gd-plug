@@ -90,6 +90,7 @@ Arguments:
 
 | Argument     | Type            | Description                                                                                                                                                                                   |
 | ------------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `zip`        | `String`        | URL to a ZIP archive to use instead of the Git repository source                                                                                                                              |
 | `include`    | `Array[String]` | Files or directories to include, only `addons/` will be included if omitted. (No expression like wildcard(*) supported yet.)                                                                  |
 | `exclude`    | `Array[String]` | Files or directories to exclude. (No expression like wildcard(*) supported yet.)                                                                                                              |
 | `branch`     | `String`        | Name of branch to freeze to                                                                                                                                                                   |
@@ -248,6 +249,7 @@ func _plugging():
     # Source other than github
     plug("https://gitlab.com/Xecestel/sound-manager") # Gitlab
     plug("file:///D/Godot/local-project/.git") # Local git repo
+    plug("namespace/my-addon", {"zip": "https://example.com/my-addon.zip"})
 
     connect("updated", "_on_plugin_updated")
 
