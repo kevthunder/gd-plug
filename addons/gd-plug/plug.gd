@@ -152,6 +152,8 @@ func show_config_syntax():
 	logger.info("Github repo: \"username/repo\", for example, \"imjp94/gd-plug\"")
 	logger.info("or")
 	logger.info("Any valid git url, for example, \"git@github.com:username/repo.git\"")
+	logger.info("or")
+	logger.info("A direct URL to a .zip archive")
 	logger.dedent()
 	logger.info("")
 	logger.info("Arguments:")
@@ -403,6 +405,10 @@ func plug(repo, args={}):
 	is_valid = is_valid and validate_var_type(plugin, "on_updated", TYPE_STRING, "String")
 	plugin.install_root = args.get("install_root", "")
 	is_valid = is_valid and validate_var_type(plugin, "install_root", TYPE_STRING, "String")
+	plugin.is_zip = is_zip_url(plugin.url)
+	if plugin.is_zip and (plugin.branch or plugin.tag or plugin.commit):
+		logger.error("Branch, tag, and commit options are not supported for ZIP URLs")
+		is_valid = false
 
 	if is_valid:
 		_plugged_plugins[plugin.name] = plugin
@@ -437,9 +443,22 @@ func update_plugin(plugin, checking=false):
 		logger.info("%s new plugin" % plugin.name)
 		return true
 
-	var git = _GitExecutable.new(ProjectSettings.globalize_path(plugin.plug_dir), logger)
 	var installed_plugin = get_installed_plugin(plugin.name)
 	var changes = compare_plugins(plugin, installed_plugin)
+	if plugin.is_zip:
+		if checking:
+			if changes:
+				logger.info("%s changed %s" % [plugin.name, changes])
+			else:
+				logger.info("%s is a ZIP archive; update status cannot be checked" % plugin.name)
+		else:
+			logger.info("%s refreshing ZIP archive from %s..." % [plugin.name, plugin.url])
+			uninstall(installed_plugin)
+			if download(plugin) == OK:
+				install(plugin)
+		return
+
+	var git = _GitExecutable.new(ProjectSettings.globalize_path(plugin.plug_dir), logger)
 	var should_clone = false
 	var should_pull = false
 	var should_reinstall = false
@@ -496,8 +515,12 @@ func download(plugin):
 	if project_dir.dir_exists(plugin.plug_dir):
 		directory_delete_recursively(plugin.plug_dir)
 	project_dir.make_dir(plugin.plug_dir)
-	var result = _GitExecutable.new(global_dest_dir, logger).clone(plugin.url, global_dest_dir, {"branch": plugin.branch, "tag": plugin.tag, "commit": plugin.commit})
-	if result.exit == OK:
+	var result = OK
+	if plugin.is_zip:
+		result = _ZipArchive.new(logger).download_and_extract(plugin.url, global_dest_dir)
+	else:
+		result = _GitExecutable.new(global_dest_dir, logger).clone(plugin.url, global_dest_dir, {"branch": plugin.branch, "tag": plugin.tag, "commit": plugin.commit}).exit
+	if result == OK:
 		logger.info("Successfully download %s" % [plugin.name])
 	else:
 		logger.info("Failed to download %s" % plugin.name)
@@ -784,8 +807,21 @@ func compare_plugins(p1, p2):
 	return changed_keys
 
 func get_plugin_name_from_repo(repo):
-	repo = repo.replace(".git", "").trim_suffix("/")
+	var source = repo.split("?")[0].split("#")[0].trim_suffix("/")
+	if source.contains("github.com/") and source.contains("/archive/"):
+		var github_parts = source.split("/")
+		if github_parts.size() > 4:
+			return github_parts[4]
+	if source.contains("codeload.github.com/"):
+		var codeload_parts = source.split("/")
+		if codeload_parts.size() > 3:
+			return codeload_parts[3]
+	repo = source.replace(".git", "").trim_suffix(".zip")
 	return repo.get_file()
+
+func is_zip_url(url):
+	var source = url.split("?")[0].split("#")[0]
+	return source.to_lower().ends_with(".zip")
 
 func validate_var_type(obj, var_name, type, type_string):
 	var value = obj.get(var_name)
@@ -948,6 +984,204 @@ class _GitExecutable extends RefCounted:
 			var is_commit_behind = !!ahead_behind[1] if ahead_behind.size() == 2 else false
 			return FAILED if is_commit_behind else OK
 		return FAILED
+
+class _ZipArchive extends RefCounted:
+	var logger
+
+	func _init(p_logger):
+		logger = p_logger
+
+	func download_and_extract(url, destination):
+		var downloaded = _download(url)
+		if downloaded.exit != OK:
+			return downloaded.exit
+
+		var archive_path = destination + ".zip"
+		var archive_file = FileAccess.open(archive_path, FileAccess.WRITE)
+		if archive_file == null:
+			logger.error("Failed to create ZIP file at %s" % archive_path)
+			return ERR_CANT_CREATE
+		archive_file.store_buffer(downloaded.body)
+		archive_file.close()
+
+		var reader = ZIPReader.new()
+		var result = reader.open(archive_path)
+		if result == OK:
+			result = _extract(reader, destination)
+			reader.close()
+		else:
+			logger.error("Failed to open ZIP archive: %s" % url)
+		DirAccess.remove_absolute(archive_path)
+		return result
+
+	func _download(url):
+		for redirect_count in 6:
+			var parsed_url = _parse_url(url)
+			if parsed_url.is_empty():
+				logger.error("Invalid ZIP URL: %s" % url)
+				return {"exit": ERR_INVALID_PARAMETER}
+
+			var client = HTTPClient.new()
+			var tls_options = TLSOptions.client() if parsed_url.scheme == "https" else null
+			var result = client.connect_to_host(parsed_url.host, parsed_url.port, tls_options)
+			if result != OK:
+				logger.error("Failed to connect to %s" % parsed_url.host)
+				return {"exit": result}
+
+			var deadline = Time.get_ticks_msec() + 30000
+			while client.get_status() in [HTTPClient.STATUS_RESOLVING, HTTPClient.STATUS_CONNECTING]:
+				client.poll()
+				if Time.get_ticks_msec() > deadline:
+					client.close()
+					logger.error("Timed out connecting to %s" % parsed_url.host)
+					return {"exit": ERR_TIMEOUT}
+				OS.delay_msec(1)
+			if client.get_status() != HTTPClient.STATUS_CONNECTED:
+				logger.error("Failed to connect to %s" % parsed_url.host)
+				client.close()
+				return {"exit": ERR_CANT_CONNECT}
+
+			result = client.request(HTTPClient.METHOD_GET, parsed_url.path, ["User-Agent: gd-plug"])
+			if result != OK:
+				client.close()
+				return {"exit": result}
+
+			deadline = Time.get_ticks_msec() + 30000
+			while not client.has_response():
+				client.poll()
+				if Time.get_ticks_msec() > deadline:
+					client.close()
+					logger.error("Timed out waiting for ZIP response from %s" % parsed_url.host)
+					return {"exit": ERR_TIMEOUT}
+				OS.delay_msec(1)
+
+			var response_code = client.get_response_code()
+			var response_headers = client.get_response_headers()
+			if response_code in [301, 302, 303, 307, 308]:
+				var location = ""
+				for header in response_headers:
+					if header.to_lower().begins_with("location:"):
+						location = header.substr(header.find(":") + 1).strip_edges()
+						break
+				client.close()
+				if location.is_empty():
+					logger.error("ZIP URL redirect did not include a location")
+					return {"exit": FAILED}
+				if not location.contains("://"):
+					location = parsed_url.origin + (location if location.begins_with("/") else parsed_url.base_path + location)
+				url = location
+				continue
+			if response_code != 200:
+				client.close()
+				logger.error("ZIP download failed with HTTP status %d" % response_code)
+				return {"exit": FAILED}
+
+			var body = PackedByteArray()
+			deadline = Time.get_ticks_msec() + 30000
+			while client.get_status() == HTTPClient.STATUS_BODY:
+				client.poll()
+				var chunk = client.read_response_body_chunk()
+				if not chunk.is_empty():
+					body.append_array(chunk)
+					deadline = Time.get_ticks_msec() + 30000
+				elif Time.get_ticks_msec() > deadline:
+					client.close()
+					logger.error("Timed out downloading ZIP archive from %s" % parsed_url.host)
+					return {"exit": ERR_TIMEOUT}
+				OS.delay_msec(1)
+			client.close()
+			if body.is_empty():
+				logger.error("Downloaded ZIP archive is empty")
+				return {"exit": FAILED}
+			return {"exit": OK, "body": body}
+
+		logger.error("Too many redirects while downloading ZIP archive")
+		return {"exit": FAILED}
+
+	func _parse_url(url):
+		var scheme_end = url.find("://")
+		if scheme_end < 0:
+			return {}
+		var scheme = url.substr(0, scheme_end).to_lower()
+		if scheme not in ["http", "https"]:
+			return {}
+		var authority_start = scheme_end + 3
+		var authority_end = url.find("/", authority_start)
+		var query_start = url.find("?", authority_start)
+		if authority_end < 0 or (query_start >= 0 and query_start < authority_end):
+			authority_end = query_start
+		var authority = url.substr(authority_start, authority_end - authority_start) if authority_end >= 0 else url.substr(authority_start)
+		var path = url.substr(authority_end) if authority_end >= 0 else "/"
+		if path.begins_with("?"):
+			path = "/" + path
+		path = path.split("#")[0]
+		if path.is_empty():
+			path = "/"
+
+		var host = authority
+		var port = 443 if scheme == "https" else 80
+		var port_separator = authority.rfind(":")
+		if authority.begins_with("["):
+			var closing_bracket = authority.find("]")
+			if closing_bracket >= 0:
+				host = authority.substr(0, closing_bracket + 1)
+				if closing_bracket + 1 < authority.length():
+					port = authority.substr(closing_bracket + 2).to_int()
+		elif port_separator >= 0 and authority.find(":") == port_separator:
+			host = authority.substr(0, port_separator)
+			port = authority.substr(port_separator + 1).to_int()
+		if host.is_empty():
+			return {}
+		var base_path = path.get_base_dir()
+		if not base_path.ends_with("/"):
+			base_path += "/"
+		return {
+			"scheme": scheme,
+			"host": host,
+			"port": port,
+			"path": path,
+			"origin": "%s://%s" % [scheme, authority],
+			"base_path": base_path
+		}
+
+	func _extract(reader, destination):
+		var files = reader.get_files()
+		var common_root = ""
+		var has_common_root = not files.is_empty()
+		for path in files:
+			var separator = path.find("/")
+			if separator < 0:
+				has_common_root = false
+				break
+			var root = path.substr(0, separator + 1)
+			if common_root.is_empty():
+				common_root = root
+			elif common_root != root:
+				has_common_root = false
+				break
+
+		for archive_path in files:
+			var relative_path = archive_path
+			if has_common_root:
+				relative_path = relative_path.trim_prefix(common_root)
+			relative_path = relative_path.replace("\\", "/")
+			if relative_path.is_empty() or relative_path.ends_with("/"):
+				continue
+			if relative_path.begins_with("/") or ":" in relative_path or ".." in relative_path.split("/"):
+				logger.error("Skipping unsafe path in ZIP archive: %s" % archive_path)
+				return ERR_INVALID_DATA
+
+			var output_path = destination.path_join(relative_path)
+			var global_output_path = ProjectSettings.globalize_path(output_path)
+			var make_dir_result = DirAccess.make_dir_recursive_absolute(global_output_path.get_base_dir())
+			if make_dir_result != OK:
+				return make_dir_result
+			var file = FileAccess.open(global_output_path, FileAccess.WRITE)
+			if file == null:
+				return ERR_CANT_CREATE
+			file.store_buffer(reader.read_file(archive_path))
+			file.close()
+		return OK
 
 class _ThreadPool extends RefCounted:
 	signal all_thread_finished()
