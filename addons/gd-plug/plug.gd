@@ -152,12 +152,11 @@ func show_config_syntax():
 	logger.info("Github repo: \"username/repo\", for example, \"imjp94/gd-plug\"")
 	logger.info("or")
 	logger.info("Any valid git url, for example, \"git@github.com:username/repo.git\"")
-	logger.info("or")
-	logger.info("A direct URL to a .zip archive")
 	logger.dedent()
 	logger.info("")
 	logger.info("Arguments:")
 	var arguments = {
+		"zip": "URL to a ZIP archive to use instead of the Git repository source",
 		"include": "Array of strings that define what files or directory to include. Only \"addons/\" will be included if omitted",
 		"exclude": "Array of strings that define what files or directory to exclude",
 		"branch": "Name of branch to freeze to",
@@ -405,7 +404,11 @@ func plug(repo, args={}):
 	is_valid = is_valid and validate_var_type(plugin, "on_updated", TYPE_STRING, "String")
 	plugin.install_root = args.get("install_root", "")
 	is_valid = is_valid and validate_var_type(plugin, "install_root", TYPE_STRING, "String")
-	plugin.is_zip = is_zip_url(plugin.url)
+	var zip_url = args.get("zip", "")
+	is_valid = is_valid and validate_var_type({"zip": zip_url}, "zip", TYPE_STRING, "String")
+	if typeof(zip_url) == TYPE_STRING and not zip_url.is_empty():
+		plugin.url = zip_url
+	plugin.is_zip = (typeof(zip_url) == TYPE_STRING and not zip_url.is_empty()) or is_zip_url(plugin.url)
 	if plugin.is_zip and (plugin.branch or plugin.tag or plugin.commit):
 		logger.error("Branch, tag, and commit options are not supported for ZIP URLs")
 		is_valid = false
@@ -444,20 +447,11 @@ func update_plugin(plugin, checking=false):
 		return true
 
 	var installed_plugin = get_installed_plugin(plugin.name)
-	var changes = compare_plugins(plugin, installed_plugin)
 	if plugin.is_zip:
-		if checking:
-			if changes:
-				logger.info("%s changed %s" % [plugin.name, changes])
-			else:
-				logger.info("%s is a ZIP archive; update status cannot be checked" % plugin.name)
-		else:
-			logger.info("%s refreshing ZIP archive from %s..." % [plugin.name, plugin.url])
-			if download(plugin) == OK:
-				uninstall(installed_plugin)
-				install(plugin)
+		update_zip_plugin(plugin, installed_plugin, checking)
 		return
 
+	var changes = compare_plugins(plugin, installed_plugin)
 	var git = _GitExecutable.new(ProjectSettings.globalize_path(plugin.plug_dir), logger)
 	var should_clone = false
 	var should_pull = false
@@ -504,6 +498,20 @@ func update_plugin(plugin, checking=false):
 			logger.info("%s reinstalling..." % plugin.name)
 			uninstall(get_installed_plugin(plugin.name))
 			install(plugin)
+
+func update_zip_plugin(plugin, installed_plugin, checking=false):
+	var changes = compare_plugins(plugin, installed_plugin)
+	if checking:
+		if changes:
+			logger.info("%s changed %s" % [plugin.name, changes])
+		else:
+			logger.info("%s is a ZIP archive; update status cannot be checked" % plugin.name)
+		return
+
+	logger.info("%s refreshing ZIP archive from %s..." % [plugin.name, plugin.url])
+	if download(plugin) == OK:
+		uninstall(installed_plugin)
+		install(plugin)
 
 func check_plugin(plugin):
 	update_plugin(plugin, true)
