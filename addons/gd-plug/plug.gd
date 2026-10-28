@@ -453,8 +453,8 @@ func update_plugin(plugin, checking=false):
 				logger.info("%s is a ZIP archive; update status cannot be checked" % plugin.name)
 		else:
 			logger.info("%s refreshing ZIP archive from %s..." % [plugin.name, plugin.url])
-			uninstall(installed_plugin)
 			if download(plugin) == OK:
+				uninstall(installed_plugin)
 				install(plugin)
 		return
 
@@ -527,7 +527,7 @@ func download(plugin):
 		# Make sure plug_dir is clean when failed
 		directory_delete_recursively(plugin.plug_dir, {"exclude": [DEFAULT_CONFIG_PATH], "test": test})
 	project_dir.remove(plugin.plug_dir) # Remove empty directory
-	return result.exit
+	return result
 
 func install(plugin):
 	var include = plugin.get("include", [])
@@ -573,6 +573,8 @@ func uninstall(plugin):
 	remove_installed_plugin(plugin.name)
 
 func is_plugin_downloaded(plugin):
+	if plugin.is_zip:
+		return FAILED
 	if not project_dir.dir_exists(plugin.plug_dir + "/.git"):
 		return
 
@@ -814,8 +816,8 @@ func get_plugin_name_from_repo(repo):
 			return github_parts[4]
 	if source.contains("codeload.github.com/"):
 		var codeload_parts = source.split("/")
-		if codeload_parts.size() > 3:
-			return codeload_parts[3]
+		if codeload_parts.size() > 4:
+			return codeload_parts[4]
 	repo = source.replace(".git", "").trim_suffix(".zip")
 	return repo.get_file()
 

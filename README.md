@@ -83,6 +83,10 @@ or
 
 - Any valid git url
 
+or
+
+- A direct URL to a `.zip` archive
+
 > [!NOTE]
 > To install plugin from private repository, full Git SSH url must be used: `plug("git@github.com:username/repo.git")`. See [Generating new SSH key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) and [Adding a new SSH key to your Github account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account)
 
@@ -248,6 +252,7 @@ func _plugging():
     # Source other than github
     plug("https://gitlab.com/Xecestel/sound-manager") # Gitlab
     plug("file:///D/Godot/local-project/.git") # Local git repo
+    plug("https://example.com/my-addon.zip") # ZIP archive
 
     connect("updated", "_on_plugin_updated")
 
