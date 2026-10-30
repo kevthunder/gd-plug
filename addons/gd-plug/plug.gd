@@ -482,6 +482,13 @@ func update_plugin(plugin, checking=false):
 			logger.info("%s repository setting changed, update required" % plugin.name)
 			should_clone = true
 
+	var missing_files = get_missing_dest_files(installed_plugin)
+	if missing_files:
+		logger.info("%s has %d missing installed file%s, reinstall required" % [plugin.name, missing_files.size(), "s" if missing_files.size() > 1 else ""])
+		should_reinstall = true
+		if not project_dir.dir_exists(plugin.plug_dir + "/.git"):
+			should_clone = true
+
 	if not checking:
 		if should_clone:
 			logger.info("%s cloning from %s..." % [plugin.name, plugin.url])
@@ -499,6 +506,13 @@ func update_plugin(plugin, checking=false):
 			logger.info("%s reinstalling..." % plugin.name)
 			uninstall(get_installed_plugin(plugin.name))
 			install(plugin)
+
+func get_missing_dest_files(installed_plugin):
+	var missing = []
+	for dest_file in installed_plugin.get("dest_files", []):
+		if not project_dir.file_exists(dest_file):
+			missing.append(dest_file)
+	return missing
 
 func update_zip_plugin(plugin, installed_plugin, checking=false):
 	var changes = compare_plugins(plugin, installed_plugin)
